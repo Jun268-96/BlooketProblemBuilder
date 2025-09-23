@@ -1,2 +1,5 @@
 ﻿openai>=1.42.0
 streamlit>=1.37.0
+numpy>=1.26.0
+pypdf>=4.0.0
+python-pptx>=0.6.21

@@ -1,4 +1,4 @@
-﻿"""Utility functions for generating Blooket-style question sets with OpenAI."""
+"""Utility functions for generating Blooket-style question sets with OpenAI."""
 from __future__ import annotations
 
 import csv
@@ -69,10 +69,12 @@ def build_prompt(
     assessment_goal: str,
     keywords: Sequence[str],
     num_questions: int,
+    reference_context: str | None = None,
 ) -> str:
     keyword_text = ", ".join(str(k).strip() for k in keywords if str(k).strip())
     keyword_block = keyword_text if keyword_text else "None provided"
-    return (
+
+    prompt = (
         "You are an assistant that helps South Korean teachers create multiple-choice quizzes for Blooket.\n"
         f"Create {num_questions} multiple-choice questions.\n"
         f"Grade level: {grade}\n"
@@ -80,12 +82,24 @@ def build_prompt(
         f"Assessment focus: {assessment_goal}\n"
         f"Key topics: {keyword_block}\n\n"
         "All question stems, answer choices, and explanations must be written in Korean.\n"
+        "Each question should default to four answer choices. Only reduce to two or three options when the learning objective clearly benefits from a limited-choice format (e.g., O/X).\n"
+    )
+
+    if reference_context:
+        prompt += (
+            "Use the following reference material as the primary source when crafting the questions. Do not mention the source directly. "
+            "If the material does not cover a topic, rely on grade-appropriate general knowledge.\n"
+            "Reference material (Korean):\n"
+            f"{reference_context}\n\n"
+        )
+
+    prompt += (
         "Return ONLY valid JSON with this schema:\n"
         "{\n"
         "  \"questions\": [\n"
         "    {\n"
         "      \"prompt\": \"Question text in Korean\",\n"
-        "      \"answers\": [\"Option1\", \"Option2\", \"Option3\", \"Option4\"],\n"
+        "      \"answers\": [\"Option1\", \"Option2\", \"Option3\", \"Option4\"],  # 기본은 4지 선다, 필요할 때만 2~3지 선다\n"
         "      \"correct_answers\": [1],  # 1-based indexes, allow multiple correct\n"
         "      \"time_limit\": 20,        # seconds, optional\n"
         "      \"explanation\": \"Rationale in Korean (optional)\"\n"
@@ -94,6 +108,9 @@ def build_prompt(
         "}\n"
         "Questions should be concise (two sentences or fewer) and age-appropriate."
     )
+
+    return prompt
+
 
 
 def ensure_api_key(api_key: str | None = None) -> str:
@@ -179,9 +196,17 @@ def generate_question_set(
     model: str = "gpt-4o-mini",
     temperature: float = 0.7,
     api_key: str | None = None,
+    reference_context: str | None = None,
 ) -> List[QuestionItem]:
     api_key = ensure_api_key(api_key)
-    prompt = build_prompt(grade, subject, assessment_goal, keywords, num_questions)
+    prompt = build_prompt(
+        grade,
+        subject,
+        assessment_goal,
+        keywords,
+        num_questions,
+        reference_context=reference_context,
+    )
     raw_json = call_openai(
         api_key=api_key,
         prompt=prompt,
@@ -189,6 +214,7 @@ def generate_question_set(
         temperature=temperature,
     )
     return parse_questions(raw_json)
+
 
 
 def resolve_template_path(platform: str, override_path: str | os.PathLike[str] | None = None) -> Path:

@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import io
 import json
 import os
@@ -12,6 +12,9 @@ from blooket_generator import (
     generate_question_set,
     load_template_columns,
 )
+
+from rag_utils import MAX_FILE_SIZE_MB, process_uploaded_documents, retrieve_relevant_context
+from review_utils import REVIEW_VERDICTS, review_question_set
 
 PLATFORM_LABELS = {"blooket": "블루킷", "gimkit": "김킷"}
 st.set_page_config(page_title="퀴즈 생성기", layout="wide")
@@ -29,6 +32,25 @@ if "questions" not in st.session_state:
     st.session_state["questions"] = None
     st.session_state["export_bytes"] = None
     st.session_state["export_filename"] = None
+
+
+if "rag_index" not in st.session_state:
+    st.session_state["rag_index"] = {
+        "vectors": None,
+        "chunks": [],
+        "hashes": set(),
+        "sources": {},
+    }
+    st.session_state["rag_last_context"] = ""
+if "rag_enabled" not in st.session_state:
+    st.session_state["rag_enabled"] = False
+
+if "review_results" not in st.session_state:
+    st.session_state["review_results"] = []
+if "review_error" not in st.session_state:
+    st.session_state["review_error"] = ""
+if "review_allow_download" not in st.session_state:
+    st.session_state["review_allow_download"] = True
 
 
 def parse_keywords(raw: str) -> List[str]:
@@ -107,54 +129,176 @@ with st.sidebar:
         type=["csv"],
         help="기본 제공 템플릿 대신 사용할 CSV 헤더가 있다면 업로드하세요.",
     )
+    rag_enabled = st.checkbox(
+        "문서 기반 생성 사용",
+        value=st.session_state.get("rag_enabled", False),
+        help="PDF나 PPTX 학습 자료를 업로드하면 문항 생성에 참고합니다.",
+    )
+    st.session_state["rag_enabled"] = rag_enabled
+
+    rag_uploads = st.file_uploader(
+        "학습 자료 업로드 (PDF/PPTX)",
+        type=["pdf", "pptx"],
+        accept_multiple_files=True,
+        help=f"각 파일은 최대 {MAX_FILE_SIZE_MB}MB까지 지원합니다.",
+    )
+
+    effective_api_key_preview = (api_key_override or "").strip() or default_api_key
+
+    if rag_uploads:
+        if not effective_api_key_preview:
+            st.warning("문서 기반 생성을 사용하려면 OpenAI API 키를 입력하거나 secrets에 저장해주세요.")
+        else:
+            rag_index, rag_status = process_uploaded_documents(
+                rag_uploads,
+                effective_api_key_preview,
+                st.session_state["rag_index"],
+            )
+            st.session_state["rag_index"] = rag_index
+            for message in rag_status["added"]:
+                st.success(message)
+            for message in rag_status["warnings"]:
+                st.warning(message)
+            for message in rag_status["errors"]:
+                st.error(message)
+
+    rag_index_state = st.session_state.get("rag_index", {})
+    if rag_index_state.get("sources"):
+        with st.expander("처리된 학습 자료", expanded=False):
+            for source in rag_index_state["sources"].values():
+                summary = f"{source['name']} · {source['chunks']}개 청크"
+                if source.get("truncated"):
+                    summary += " (일부만 사용)"
+                st.markdown(f"- {summary}")
+
 
 keywords = parse_keywords(keywords_raw)
+
+rag_index_state = st.session_state.get("rag_index", {})
+if st.session_state.get("rag_enabled", False):
+    if rag_index_state.get("sources"):
+        st.caption("업로드한 학습 자료를 우선 참고해 문항을 생성합니다.")
+    else:
+        st.info("문서 기반 생성을 켰어요. 학습 자료를 업로드하면 문항에 반영됩니다.")
 
 st.subheader("문항 생성")
 st.write("생성되는 질문, 보기, 해설은 모두 한국어로 제공됩니다.")
 
 if st.button("문항 생성하기", type="primary"):
-    try:
-        template_columns = resolve_template_columns(platform, template_upload)
-    except FileNotFoundError:
-        st.error("내장된 CSV 템플릿을 찾을 수 없습니다. data/blooket_template.csv 파일을 확인하세요.")
-    except Exception as exc:
-        st.error(f"템플릿을 불러오는 중 오류가 발생했습니다: {exc}")
-    else:
-        effective_api_key = (api_key_override or "").strip() or default_api_key
-
+    status_placeholder = st.empty()
+    with st.spinner("문항을 생성 중입니다. 잠시만 기다려 주세요..."):
+        status_placeholder.info("CSV 템플릿을 확인하는 중입니다...")
         try:
-            questions = generate_question_set(
-                grade=grade or "미지정",
-                subject=subject or "미지정",
-                assessment_goal=assessment_goal or "",
-                keywords=keywords,
-                num_questions=num_questions,
-                model=model_name.strip() or "gpt-4o-mini",
-                temperature=creativity,
-                api_key=effective_api_key or None,
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"문항 생성에 실패했습니다: {exc}")
+            template_columns = resolve_template_columns(platform, template_upload)
+        except FileNotFoundError:
+            status_placeholder.empty()
+            st.error("저장된 CSV 템플릿을 찾을 수 없습니다. data/blooket_template.csv 파일을 확인해주세요.")
+        except Exception as exc:
+            status_placeholder.empty()
+            st.error(f"템플릿을 불러오는 중 오류가 발생했습니다: {exc}")
         else:
-            for item in questions:
-                item.time_limit = time_limit
+            effective_api_key = (api_key_override or "").strip() or default_api_key
+            st.session_state["review_results"] = []
+            st.session_state["review_error"] = ""
+            st.session_state["review_allow_download"] = False
+            status_placeholder.info("OpenAI 요청을 준비하고 있어요.")
+
+            reference_context: str | None = None
+            if st.session_state.get("rag_enabled"):
+                query_components = [
+                    grade or "",
+                    subject or "",
+                    assessment_goal or "",
+                    ", ".join(keywords),
+                    f"요청 문항 수 {num_questions}개",
+                ]
+                retrieval_query = " | ".join(part for part in query_components if part)
+                if not retrieval_query:
+                    retrieval_query = "문서 기반 학습 자료"
+                rag_context = retrieve_relevant_context(
+                    retrieval_query,
+                    st.session_state.get("rag_index", {}),
+                    effective_api_key,
+                    top_k=6,
+                )
+                if rag_context:
+                    reference_context = rag_context
+                    st.session_state["rag_last_context"] = rag_context
+                    status_placeholder.info("업로드한 학습 자료를 참고해 문항을 구성하고 있어요.")
+                else:
+                    st.session_state["rag_last_context"] = ""
+                    status_placeholder.info("업로드한 자료에서 직접 사용할 정보를 찾지 못해 기본 정보를 활용합니다.")
+            else:
+                st.session_state["rag_last_context"] = ""
 
             try:
-                csv_bytes = build_question_csv(questions, template_columns, platform)
-            except Exception as exc:
-                st.error(f"CSV 파일 생성에 실패했습니다: {exc}")
-            else:
-                st.session_state["questions"] = questions
-                st.session_state["export_bytes"] = csv_bytes
-                st.session_state["export_platform"] = platform
-                file_prefix = platform
-                st.session_state["export_filename"] = (
-                    f"{file_prefix}_퀴즈_{grade or '학년'}_{subject or '과목'}.csv"
-                    .replace(" ", "_")
+                status_placeholder.info("AI에 문항 생성을 요청했습니다. 잠시만 기다려 주세요...")
+                questions = generate_question_set(
+                    grade=grade or "미정",
+                    subject=subject or "미정",
+                    assessment_goal=assessment_goal or "",
+                    keywords=keywords,
+                    num_questions=num_questions,
+                    model=model_name.strip() or "gpt-4o-mini",
+                    temperature=creativity,
+                    api_key=effective_api_key or None,
+                    reference_context=reference_context,
                 )
-                st.success("문항 생성이 완료되었습니다. 아래에서 내용을 확인하고 파일을 내려받으세요.")
+            except Exception as exc:  # noqa: BLE001
+                status_placeholder.empty()
+                st.session_state["review_allow_download"] = bool(st.session_state.get("export_bytes"))
+                st.error(f"문항 생성에 실패했습니다: {exc}")
+            else:
+                for item in questions:
+                    item.time_limit = time_limit
 
+                status_placeholder.info("CSV 파일을 정리하는 중입니다...")
+                try:
+                    csv_bytes = build_question_csv(questions, template_columns, platform)
+                except Exception as exc:
+                    status_placeholder.empty()
+                    st.session_state["review_allow_download"] = bool(st.session_state.get("export_bytes"))
+                    st.error(f"CSV 파일 생성에 실패했습니다: {exc}")
+                else:
+                    st.session_state["questions"] = questions
+                    st.session_state["export_bytes"] = csv_bytes
+                    st.session_state["export_platform"] = platform
+                    file_prefix = platform
+                    st.session_state["export_filename"] = (
+                        f"{file_prefix}_퀴즈_{grade or '학년'}_{subject or '과목'}.csv"
+                        .replace(" ", "_")
+                    )
+
+                    status_placeholder.info("생성된 문항을 자동 검수하고 있습니다...")
+                    try:
+                        review_results = review_question_set(
+                            questions,
+                            api_key=effective_api_key or None,
+                            model=model_name.strip() or "gpt-4o-mini",
+                            reference_context=reference_context,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        st.session_state["review_results"] = []
+                        st.session_state["review_error"] = str(exc)
+                        st.session_state["review_allow_download"] = True
+                        status_placeholder.warning(f"문항은 생성되었지만 자동 검수에 실패했습니다: {exc}")
+                        st.warning("문항은 생성되었지만 자동 검수에 실패했습니다. 결과를 직접 확인해주세요.")
+                    else:
+                        st.session_state["review_results"] = review_results
+                        st.session_state["review_error"] = ""
+                        fail_count = sum(1 for item in review_results if item["verdict"] == "fail")
+                        uncertain_count = sum(1 for item in review_results if item["verdict"] == "uncertain")
+                        if fail_count:
+                            st.session_state["review_allow_download"] = False
+                            status_placeholder.warning(f"자동 검수에서 {fail_count}개 문항에 문제가 발견되었습니다.")
+                            st.warning("자동 검수에서 문제가 보고된 문항이 있습니다. 내용을 확인하고 수정한 뒤 다시 생성해주세요.")
+                        else:
+                            st.session_state["review_allow_download"] = True
+                            status_placeholder.success("문항, CSV 파일, 자동 검수까지 모두 완료되었습니다!")
+                            if uncertain_count:
+                                st.info("일부 문항이 '불확실'로 표시되었습니다. 해당 문항을 확인해 주세요.")
+                            else:
+                                st.success("문항 생성이 완료되었습니다. 아래에서 내용을 확인하고 파일을 내려받으세요.")
 questions_state: List[QuestionItem] | None = st.session_state.get("questions")
 export_bytes_state: bytes | None = st.session_state.get("export_bytes")
 file_name_state: str | None = st.session_state.get("export_filename")
@@ -193,15 +337,43 @@ if questions_state:
             for q in questions_state
         ]
     }
-    with st.expander("생성된 JSON 보기"):
+    with st.expander("생성한 JSON 보기"):
         st.code(json.dumps(raw_json, ensure_ascii=False, indent=2), language="json")
 
-    if export_bytes_state and file_name_state:
+    last_context = st.session_state.get("rag_last_context", "")
+    if last_context:
+        with st.expander("참고한 자료 요약", expanded=False):
+            st.write(last_context)
+
+    review_results_state = st.session_state.get("review_results", [])
+    review_error_state = st.session_state.get("review_error", "")
+    if review_error_state:
+        st.warning(f"자동 검수 중 오류가 발생했습니다: {review_error_state}")
+    if review_results_state:
+        st.subheader("자동 검수 결과")
+        verdict_labels = {"pass": "통과", "fail": "실패", "uncertain": "불확실"}
+        review_table = []
+        for item in review_results_state:
+            review_table.append(
+                {
+                    "문항 번호": item["question_index"],
+                    "결과": verdict_labels.get(item["verdict"], item["verdict"]),
+                    "이슈": item.get("issues") or "-",
+                }
+            )
+        st.dataframe(review_table, use_container_width=True)
+
+    allow_download = st.session_state.get("review_allow_download", True)
+    if not allow_download:
+        st.error("자동 검수에서 문제가 발견되어 CSV 다운로드가 잠시 비활성화되었습니다. 문항을 수정한 뒤 다시 생성해주세요.")
+    elif export_bytes_state and file_name_state:
         st.download_button(
             label=f"{platform_label} CSV 다운로드",
             data=export_bytes_state,
             file_name=file_name_state,
             mime="text/csv",
         )
+
 else:
     st.info("문항을 생성하면 미리보기와 다운로드 버튼이 표시됩니다.")
+
