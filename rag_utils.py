@@ -5,8 +5,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
+import google.generativeai as genai
 import numpy as np
-from openai import OpenAI
 from pypdf import PdfReader
 from pptx import Presentation
 
@@ -17,7 +17,7 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 MAX_CHUNKS_PER_FILE = 200
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "models/text-embedding-004"
 
 
 @dataclass
@@ -117,13 +117,16 @@ def _build_document_chunks(
 
 
 def _embed_texts(texts: Sequence[str], api_key: str, batch_size: int = 64) -> np.ndarray:
-    client = OpenAI(api_key=ensure_api_key(api_key))
+    ensure_api_key(api_key)
     vectors: List[List[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
-        response = client.embeddings.create(model=EMBEDDING_MODEL, input=list(batch))
-        ordered = sorted(response.data, key=lambda item: item.index)
-        vectors.extend(item.embedding for item in ordered)
+        for item in batch:
+            response = genai.embed_content(model=EMBEDDING_MODEL, content=item)
+            embedding = response.get("embedding") if isinstance(response, dict) else getattr(response, "embedding", None)
+            if not embedding:
+                raise RuntimeError("임베딩 결과가 비어 있습니다.")
+            vectors.append(list(embedding))
     return np.asarray(vectors, dtype=np.float32)
 
 
@@ -218,9 +221,12 @@ def retrieve_relevant_context(
     if not index or not index.get("chunks") or index.get("vectors") is None:
         return ""
 
-    client = OpenAI(api_key=ensure_api_key(api_key))
-    response = client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
-    query_vector = np.asarray(response.data[0].embedding, dtype=np.float32)
+    ensure_api_key(api_key)
+    response = genai.embed_content(model=EMBEDDING_MODEL, content=query)
+    embedding = response.get("embedding") if isinstance(response, dict) else getattr(response, "embedding", None)
+    if not embedding:
+        return ""
+    query_vector = np.asarray(embedding, dtype=np.float32)
 
     vectors: np.ndarray = index["vectors"]
     similarities = vectors @ query_vector

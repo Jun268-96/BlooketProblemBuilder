@@ -7,6 +7,7 @@ from typing import List
 import streamlit as st
 
 from blooket_generator import (
+    DEFAULT_MODEL,
     QuestionItem,
     build_question_csv,
     generate_question_set,
@@ -14,15 +15,13 @@ from blooket_generator import (
 )
 
 from rag_utils import MAX_FILE_SIZE_MB, process_uploaded_documents, retrieve_relevant_context
-from review_utils import REVIEW_VERDICTS, review_question_set
-
 PLATFORM_LABELS = {"blooket": "블루킷", "gimkit": "김킷"}
 st.set_page_config(page_title="퀴즈 생성기", layout="wide")
 
 st.title("퀴즈 생성기")
 st.markdown(
     """
-OpenAI API를 활용해 한국어 객관식 문제를 자동으로 만들고, 템플릿에 바로 채워 넣어 주는 도구입니다.
+Gemini API를 활용해 한국어 객관식 문제를 자동으로 만들고, 템플릿에 바로 채워 넣어 주는 도구입니다.
 사이드바에 학년·교과·평가 내용·핵심 키워드를 입력한 뒤 완성된 CSV 파일을 다운로드하세요.
 """
 )
@@ -44,11 +43,6 @@ if "rag_index" not in st.session_state:
     st.session_state["rag_last_context"] = ""
 if "rag_enabled" not in st.session_state:
     st.session_state["rag_enabled"] = False
-
-if "review_results" not in st.session_state:
-    st.session_state["review_results"] = []
-if "review_error" not in st.session_state:
-    st.session_state["review_error"] = ""
 
 
 def parse_keywords(raw: str) -> List[str]:
@@ -75,24 +69,30 @@ def resolve_template_columns(platform: str, uploaded_file) -> List[str]:
     return columns
 
 
-def resolve_default_api_key() -> str:
-    env_key = (os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key") or "").strip()
+def resolve_default_genai_key() -> str:
+    env_key = (
+        os.getenv("GEMINI_API_KEY")
+        or os.getenv("gemini_api_key")
+        or os.getenv("GOOGLE_API_KEY")
+        or os.getenv("google_api_key")
+        or ""
+    ).strip()
     if env_key:
         return env_key
 
     secrets_obj = getattr(st, "secrets", {})  # type: ignore[attr-defined]
-    direct_key = str(getattr(secrets_obj, "get", lambda *args, **kwargs: "")("openai_api_key", "")).strip()
+    direct_key = str(getattr(secrets_obj, "get", lambda *args, **kwargs: "")("gemini_api_key", "")).strip()
     if direct_key:
         return direct_key
 
     general = getattr(secrets_obj, "get", lambda *args, **kwargs: {})("general", {})
-    nested_key = str(getattr(general, "get", lambda *args, **kwargs: "")("openai_api_key", "")).strip()
+    nested_key = str(getattr(general, "get", lambda *args, **kwargs: "")("gemini_api_key", "")).strip()
     return nested_key
 
 
 with st.sidebar:
     st.header("설정")
-    default_api_key = resolve_default_api_key()
+    default_api_key = resolve_default_genai_key()
 
     platform = st.selectbox("문항을 사용할 플랫폼", options=["blooket", "gimkit"], format_func=lambda x: f"{PLATFORM_LABELS.get(x, x.title())} ({x.title()})")
 
@@ -115,9 +115,9 @@ with st.sidebar:
     time_limit = st.number_input(
         "문항별 제한 시간 (초)", min_value=5, max_value=300, value=20, step=5
     )
-    model_name = st.text_input("OpenAI 모델", value="gpt-4o-mini")
+    model_name = st.text_input("Gemini 모델", value=DEFAULT_MODEL)
     api_key_override = st.text_input(
-        "OpenAI API 키 (선택)",
+        "Gemini API 키 (선택)",
         value="",
         type="password",
         help="비워 두면 secrets 또는 환경 변수 값을 사용합니다.",
@@ -145,7 +145,7 @@ with st.sidebar:
 
     if rag_uploads:
         if not effective_api_key_preview:
-            st.warning("문서 기반 생성을 사용하려면 OpenAI API 키를 입력하거나 secrets에 저장해주세요.")
+            st.warning("문서 기반 생성을 사용하려면 Gemini API 키를 입력하거나 secrets에 저장해주세요.")
         else:
             rag_index, rag_status = process_uploaded_documents(
                 rag_uploads,
@@ -211,9 +211,7 @@ def run_generation(
             return
 
         effective_api_key = (api_key_override or "").strip() or default_api_key
-        st.session_state["review_results"] = []
-        st.session_state["review_error"] = ""
-        status_placeholder.info("OpenAI 요청을 준비하고 있어요.")
+        status_placeholder.info("Gemini 요청을 준비하고 있어요.")
 
         reference_context: str | None = None
         if st.session_state.get("rag_enabled"):
@@ -251,7 +249,7 @@ def run_generation(
                 assessment_goal=assessment_goal or "",
                 keywords=keywords,
                 num_questions=num_questions,
-                model=model_name.strip() or "gpt-4o-mini",
+                model=model_name.strip() or DEFAULT_MODEL,
                 temperature=creativity,
                 api_key=effective_api_key or None,
                 reference_context=reference_context,
@@ -281,33 +279,8 @@ def run_generation(
             .replace(" ", "_")
         )
 
-        status_placeholder.info("생성된 문항을 자동 검수하고 있습니다...")
-        try:
-            review_results = review_question_set(
-                questions,
-                api_key=effective_api_key or None,
-                model=model_name.strip() or "gpt-4o-mini",
-                reference_context=reference_context,
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.session_state["review_results"] = []
-            st.session_state["review_error"] = str(exc)
-            status_placeholder.warning(f"문항은 생성되었지만 자동 검수에 실패했습니다: {exc}")
-            st.warning("문항은 생성되었지만 자동 검수에 실패했습니다. 결과를 직접 확인해주세요.")
-        else:
-            st.session_state["review_results"] = review_results
-            st.session_state["review_error"] = ""
-            fail_count = sum(1 for item in review_results if item["verdict"] == "fail")
-            uncertain_count = sum(1 for item in review_results if item["verdict"] == "uncertain")
-            if fail_count:
-                status_placeholder.warning(f"자동 검수에서 {fail_count}개 문항에 문제가 발견되었습니다.")
-                st.warning("자동 검수에서 문제가 보고된 문항이 있습니다. 내용을 확인하고 수정한 뒤 다시 생성해주세요.")
-            else:
-                status_placeholder.success("문항, CSV 파일, 자동 검수까지 모두 완료되었습니다!")
-                if uncertain_count:
-                    st.info("일부 문항이 '불확실'로 표시되었습니다. 해당 문항을 확인해 주세요.")
-                else:
-                    st.success("문항 생성이 완료되었습니다. 아래에서 내용을 확인하고 파일을 내려받으세요.")
+        status_placeholder.success("문항과 CSV 파일 생성이 완료되었습니다!")
+        st.success("문항 생성이 완료되었습니다. 아래에서 내용을 확인하고 파일을 내려받으세요.")
 
 
 if st.button("문항 생성하기", type="primary"):
@@ -352,53 +325,10 @@ if questions_state:
     st.subheader("미리보기")
     st.dataframe(records, use_container_width=True)
 
-    raw_json = {
-        "questions": [
-            {
-                "prompt": q.prompt,
-                "answers": q.answers,
-                "correct_answers": q.correct_answers,
-                "time_limit": q.time_limit,
-                "explanation": q.explanation,
-            }
-            for q in questions_state
-        ]
-    }
-    with st.expander("생성한 JSON 보기"):
-        st.code(json.dumps(raw_json, ensure_ascii=False, indent=2), language="json")
-
     last_context = st.session_state.get("rag_last_context", "")
     if last_context:
         with st.expander("참고한 자료 요약", expanded=False):
             st.write(last_context)
-
-    review_results_state = st.session_state.get("review_results", [])
-    review_error_state = st.session_state.get("review_error", "")
-    if review_error_state:
-        st.warning(f"자동 검수 중 오류가 발생했습니다: {review_error_state}")
-
-    fail_present = False
-    uncertain_present = False
-    if review_results_state:
-        st.subheader("자동 검수 결과")
-        verdict_labels = {"pass": "통과", "fail": "실패", "uncertain": "불확실"}
-        review_table = []
-        for item in review_results_state:
-            review_table.append(
-                {
-                    "문항 번호": item["question_index"],
-                    "결과": verdict_labels.get(item["verdict"], item["verdict"]),
-                    "이슈": item.get("issues") or "-",
-                }
-            )
-        st.dataframe(review_table, use_container_width=True)
-        fail_present = any(entry["verdict"] == "fail" for entry in review_results_state)
-        uncertain_present = any(entry["verdict"] == "uncertain" for entry in review_results_state)
-
-    if fail_present:
-        st.error("자동 검수에서 문제가 보고된 문항이 있습니다. 내용을 확인한 뒤 상단의 ‘문항 생성하기’ 버튼을 다시 눌러 재생성해 주세요.")
-    elif uncertain_present:
-        st.info("일부 문항이 '불확실'로 표시되었습니다. 해당 문항을 확인해 주세요.")
 
     st.caption("CSV는 현재 상태 그대로 다운로드됩니다. 수정 후에는 ‘문항 생성하기’ 버튼으로 새로 생성해 주세요.")
     if export_bytes_state and file_name_state:
@@ -411,4 +341,3 @@ if questions_state:
 
 else:
     st.info("문항을 생성하면 미리보기와 다운로드 버튼이 표시됩니다.")
-

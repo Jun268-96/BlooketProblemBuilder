@@ -1,4 +1,4 @@
-"""Utility functions for generating Blooket-style question sets with OpenAI."""
+"""Utility functions for generating Blooket-style question sets with Gemini."""
 from __future__ import annotations
 
 import csv
@@ -9,13 +9,15 @@ from io import StringIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
-from openai import OpenAI
+import google.generativeai as genai
 
 MAX_TIME_LIMIT = 300
 DEFAULT_TEMPLATE_PATHS: Dict[str, Path] = {
     "blooket": Path("data/blooket_template.csv"),
     "gimkit": Path("data/gimkit_template.csv"),
 }
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
+_CONFIGURED_API_KEY: str | None = None
 
 
 @dataclass
@@ -42,11 +44,18 @@ class QuestionItem:
             if isinstance(idx, str):
                 if not idx.strip():
                     continue
+                idx = int(float(idx))
+            else:
                 idx = int(idx)
+
             if idx < 1 or idx > len(answers):
-                raise ValueError(
-                    f"Correct answer index {idx} out of bounds for answers: {answers}"
-                )
+                if 0 <= idx < len(answers):
+                    idx += 1  # Gemini occasionally returns 0-based indexes; shift to 1-based.
+                else:
+                    raise ValueError(
+                        f"Correct answer index {idx} out of bounds for answers: {answers}"
+                    )
+
             normalized_correct.append(idx)
 
         if not normalized_correct:
@@ -114,36 +123,57 @@ def build_prompt(
 
 
 def ensure_api_key(api_key: str | None = None) -> str:
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    """Ensure the Gemini SDK is configured with a usable API key."""
+
+    key = (
+        api_key
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GENAI_API_KEY")
+        or ""
+    ).strip()
+    if not key:
         raise RuntimeError(
-            "OpenAI API key not found. Set the OPENAI_API_KEY environment variable or add openai_api_key to Streamlit secrets."
+            "Gemini API key not found. Set the GEMINI_API_KEY environment variable or add gemini_api_key to Streamlit secrets."
         )
-    return api_key
+    global _CONFIGURED_API_KEY
+    if _CONFIGURED_API_KEY != key:
+        genai.configure(api_key=key)
+        _CONFIGURED_API_KEY = key
+    return key
 
 
-def call_openai(
+def call_gemini(
     api_key: str,
     prompt: str,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
     max_output_tokens: int = 2000,
 ) -> str:
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": "You produce only valid JSON responses for Korean multiple-choice quizzes.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=max_output_tokens,
+    """Call the Gemini chat model and enforce a JSON-only response."""
+
+    ensure_api_key(api_key)
+    model_client = genai.GenerativeModel(model_name=model)
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": max_output_tokens,
+        "response_mime_type": "application/json",
+    }
+    response = model_client.generate_content(
+        prompt,
+        generation_config=generation_config,
     )
-    return response.choices[0].message.content
+    content = getattr(response, "text", None) or ""
+    if not content and hasattr(response, "candidates"):
+        for candidate in response.candidates or []:
+            for part in getattr(candidate.content, "parts", []):
+                text = getattr(part, "text", "")
+                if text:
+                    content += text
+    content = content.strip()
+    if not content:
+        raise RuntimeError("Gemini 응답이 비어 있습니다.")
+    return content
 
 
 def parse_questions(raw_json: str) -> List[QuestionItem]:
@@ -193,7 +223,7 @@ def generate_question_set(
     assessment_goal: str,
     keywords: Sequence[str],
     num_questions: int,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
     api_key: str | None = None,
     reference_context: str | None = None,
@@ -207,7 +237,7 @@ def generate_question_set(
         num_questions,
         reference_context=reference_context,
     )
-    raw_json = call_openai(
+    raw_json = call_gemini(
         api_key=api_key,
         prompt=prompt,
         model=model,
@@ -307,4 +337,5 @@ __all__ = [
     "build_question_csv",
     "load_template_columns",
     "resolve_template_path",
+    "DEFAULT_MODEL",
 ]

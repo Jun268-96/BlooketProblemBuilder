@@ -1,11 +1,11 @@
 ﻿# Blooket & Gimkit Quiz Builder
 
-Streamlit app that calls the OpenAI API to generate Korean multiple-choice questions and exports platform-ready CSV files (Blooket or Gimkit).
+Streamlit app that calls the Gemini API to generate Korean multiple-choice questions and exports platform-ready CSV files (Blooket or Gimkit).
 
 ## Requirements
 
 - Python 3.10+
-- OpenAI API key (`OPENAI_API_KEY` environment variable or `.streamlit/secrets.toml`)
+- Gemini API key (`GEMINI_API_KEY` environment variable or `.streamlit/secrets.toml`)
 
 ```bash
 pip install -r requirements.txt
