@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence
 
 import google.generativeai as genai
 
@@ -177,7 +177,7 @@ def call_gemini(
 
 
 def parse_questions(raw_json: str) -> List[QuestionItem]:
-    payload = json.loads(raw_json)
+    payload = _load_json_strict(raw_json)
     questions = payload.get("questions")
     if not isinstance(questions, Iterable):
         raise ValueError("JSON response does not contain a 'questions' array.")
@@ -215,6 +215,28 @@ def parse_questions(raw_json: str) -> List[QuestionItem]:
     if not parsed:
         raise ValueError("No questions were generated.")
     return parsed
+
+
+def _load_json_strict(raw_json: str) -> Dict[str, Any]:
+    """Parse Gemini 응답을 최대한 복구해 JSON으로 변환한다.
+
+    - 기본적으로 json.loads를 시도하고 실패 시 첫 '{'부터 마지막 '}' 구간을 잘라 재시도한다.
+    - 그래도 실패하면 원래 예외 메시지를 포함한 ValueError를 던져서 UI에 명확히 표시된다.
+    """
+
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        cleaned = raw_json.strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            sliced = cleaned[start : end + 1]
+            try:
+                return json.loads(sliced)
+            except Exception:
+                pass
+        raise ValueError(f"Gemini JSON 파싱 실패: {exc}") from exc
 
 
 def generate_question_set(

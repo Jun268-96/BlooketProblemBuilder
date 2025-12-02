@@ -17,6 +17,7 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
 MAX_CHUNKS_PER_FILE = 200
+MAX_CONTEXT_CHARS = 4000  # RAG 컨텍스트 길이 상한(모델 JSON 깨짐 방지)
 EMBEDDING_MODEL = "models/text-embedding-004"
 
 
@@ -250,7 +251,14 @@ def retrieve_relevant_context(
         location = chunk.metadata.get("location", chunk.source)
         selected_parts.append(f"[{location}] {chunk.content}")
 
-    return "\n\n".join(selected_parts)
+    joined = "\n\n".join(selected_parts)
+    if MAX_CONTEXT_CHARS and len(joined) > MAX_CONTEXT_CHARS:
+        # 길이를 자를 때 문단 경계를 최대한 지켜 JSON 깨짐을 방지한다.
+        trimmed = joined[:MAX_CONTEXT_CHARS]
+        last_break = trimmed.rfind("\n")
+        joined = (trimmed if last_break == -1 else trimmed[:last_break]).strip()
+
+    return joined
 
 
 __all__ = [
