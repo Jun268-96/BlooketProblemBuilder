@@ -3,3 +3,7 @@
 .env
 .secrets
 .streamlit/secrets.toml
+.vscode/
+practice
+practice.c
+practice.dSYM/

@@ -12,7 +12,7 @@ from pptx import Presentation
 
 from blooket_generator import ensure_api_key
 
-MAX_FILE_SIZE_MB = 8
+MAX_FILE_SIZE_MB = 50
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
