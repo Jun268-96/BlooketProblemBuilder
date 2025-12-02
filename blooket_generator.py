@@ -1,6 +1,7 @@
 """Utility functions for generating Blooket-style question sets with Gemini."""
 from __future__ import annotations
 
+import ast
 import csv
 import json
 import os
@@ -224,10 +225,21 @@ def _load_json_strict(raw_json: str) -> Dict[str, Any]:
     - 그래도 실패하면 원래 예외 메시지를 포함한 ValueError를 던져서 UI에 명확히 표시된다.
     """
 
+    cleaned = raw_json.strip()
+
+    # 코드펜스 제거
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
     try:
-        return json.loads(raw_json)
+        return json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        cleaned = raw_json.strip()
+        # 가장 바깥 {} 범위를 잘라 재시도
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start != -1 and end != -1 and end > start:
@@ -236,6 +248,13 @@ def _load_json_strict(raw_json: str) -> Dict[str, Any]:
                 return json.loads(sliced)
             except Exception:
                 pass
+        # Python 딕셔너리 스타일('{', '}' + 단일따옴표)일 때 literal_eval로 복구
+        try:
+            evaluated = ast.literal_eval(cleaned)
+            if isinstance(evaluated, dict):
+                return evaluated
+        except Exception:
+            pass
         raise ValueError(f"Gemini JSON 파싱 실패: {exc}") from exc
 
 
