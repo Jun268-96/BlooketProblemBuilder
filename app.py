@@ -229,7 +229,7 @@ def run_generation(
                 retrieval_query,
                 st.session_state.get("rag_index", {}),
                 effective_api_key,
-                top_k=4,  # 컨텍스트 길이를 줄여 JSON 파싱 안정성 확보
+                top_k=3,  # 컨텍스트 길이를 줄여 JSON 파싱 안정성 확보
             )
             if rag_context:
                 reference_context = rag_context
