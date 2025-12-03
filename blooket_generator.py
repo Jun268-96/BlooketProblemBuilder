@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import csv
 import json
+import json5
 import os
 from dataclasses import dataclass
 from io import StringIO
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 import google.generativeai as genai
+from google.generativeai import types as genai_types
 
 MAX_TIME_LIMIT = 300
 DEFAULT_TEMPLATE_PATHS: Dict[str, Path] = {
@@ -19,6 +21,36 @@ DEFAULT_TEMPLATE_PATHS: Dict[str, Path] = {
 }
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 _CONFIGURED_API_KEY: str | None = None
+RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "answers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 4,
+                    },
+                    "correct_answers": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 1,
+                        "maxItems": 4,
+                    },
+                    "time_limit": {"type": "integer"},
+                    "explanation": {"type": "string"},
+                },
+                "required": ["prompt", "answers", "correct_answers"],
+            },
+        }
+    },
+    "required": ["questions"],
+}
 
 
 @dataclass
@@ -155,15 +187,13 @@ def call_gemini(
 
     ensure_api_key(api_key)
     model_client = genai.GenerativeModel(model_name=model)
-    generation_config = {
-        "temperature": temperature,
-        "max_output_tokens": max_output_tokens,
-        "response_mime_type": "application/json",
-    }
-    response = model_client.generate_content(
-        prompt,
-        generation_config=generation_config,
+    generation_config = genai_types.GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        response_mime_type="application/json",
+        response_schema=RESPONSE_SCHEMA,
     )
+    response = model_client.generate_content(prompt, generation_config=generation_config)
     content = getattr(response, "text", None) or ""
     if not content and hasattr(response, "candidates"):
         for candidate in response.candidates or []:
@@ -248,6 +278,11 @@ def _load_json_strict(raw_json: str) -> Dict[str, Any]:
                 return json.loads(sliced)
             except Exception:
                 pass
+        # JSON5 스타일(무따옴표 키, 단일따옴표, 트레일링 콤마) 복구
+        try:
+            return json5.loads(cleaned)
+        except Exception:
+            pass
         # Python 딕셔너리 스타일('{', '}' + 단일따옴표)일 때 literal_eval로 복구
         try:
             evaluated = ast.literal_eval(cleaned)

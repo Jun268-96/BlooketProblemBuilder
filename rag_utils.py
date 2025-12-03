@@ -14,10 +14,10 @@ from blooket_generator import ensure_api_key
 
 MAX_FILE_SIZE_MB = 50
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 900
+CHUNK_OVERLAP = 150
 MAX_CHUNKS_PER_FILE = 200
-MAX_CONTEXT_CHARS = 1800  # RAG 컨텍스트 길이 상한(모델 JSON 깨짐 방지)
+MAX_CONTEXT_CHARS = 1500  # RAG 컨텍스트 길이 상한(모델 JSON 깨짐 방지)
 EMBEDDING_MODEL = "models/text-embedding-004"
 
 
