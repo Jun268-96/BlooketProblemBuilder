@@ -33,14 +33,10 @@ RESPONSE_SCHEMA: Dict[str, Any] = {
                     "answers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "minItems": 1,
-                        "maxItems": 4,
                     },
                     "correct_answers": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "minItems": 1,
-                        "maxItems": 4,
                     },
                     "time_limit": {"type": "integer"},
                     "explanation": {"type": "string"},
