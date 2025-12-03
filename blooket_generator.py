@@ -274,6 +274,16 @@ def _load_json_strict(raw_json: str) -> Dict[str, Any]:
                 return json.loads(sliced)
             except Exception:
                 pass
+            try:
+                return json5.loads(sliced)
+            except Exception:
+                pass
+            try:
+                evaluated = ast.literal_eval(sliced)
+                if isinstance(evaluated, dict):
+                    return evaluated
+            except Exception:
+                pass
         # JSON5 스타일(무따옴표 키, 단일따옴표, 트레일링 콤마) 복구
         try:
             return json5.loads(cleaned)
