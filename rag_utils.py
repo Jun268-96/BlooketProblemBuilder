@@ -214,7 +214,7 @@ def retrieve_relevant_context(
     query: str,
     index: Dict[str, Any],
     api_key: str,
-    top_k: int = 5,
+    top_k: int = 3,
     min_score: float = 0.2,
 ) -> str:
     if not query.strip():

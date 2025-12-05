@@ -177,7 +177,7 @@ def call_gemini(
     prompt: str,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.7,
-    max_output_tokens: int = 2000,
+    max_output_tokens: int = 4000,
 ) -> str:
     """Call the Gemini chat model and enforce a JSON-only response."""
 
