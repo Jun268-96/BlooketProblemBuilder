@@ -216,6 +216,7 @@ def retrieve_relevant_context(
     api_key: str,
     top_k: int = 3,
     min_score: float = 0.2,
+    max_context_chars: int = MAX_CONTEXT_CHARS,
 ) -> str:
     if not query.strip():
         return ""
@@ -252,9 +253,9 @@ def retrieve_relevant_context(
         selected_parts.append(f"[{location}] {chunk.content}")
 
     joined = "\n\n".join(selected_parts)
-    if MAX_CONTEXT_CHARS and len(joined) > MAX_CONTEXT_CHARS:
+    if max_context_chars and len(joined) > max_context_chars:
         # 길이를 자를 때 문단 경계를 최대한 지켜 JSON 깨짐을 방지한다.
-        trimmed = joined[:MAX_CONTEXT_CHARS]
+        trimmed = joined[:max_context_chars]
         last_break = trimmed.rfind("\n")
         joined = (trimmed if last_break == -1 else trimmed[:last_break]).strip()
 

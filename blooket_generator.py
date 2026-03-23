@@ -20,6 +20,17 @@ DEFAULT_TEMPLATE_PATHS: Dict[str, Path] = {
     "gimkit": Path("data/gimkit_template.csv"),
 }
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODELS: list[tuple[str, str]] = [
+    # (model_id, 표시명)
+    # ── 안정 모델 ──────────────────────────────────────────────
+    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite  ★ 기본 · 저비용"),
+    ("gemini-2.5-flash",      "Gemini 2.5 Flash       균형형"),
+    ("gemini-2.5-pro",        "Gemini 2.5 Pro         고성능"),
+    # ── 프리뷰 모델 (최신) ────────────────────────────────────
+    ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite  Preview · 최신 저비용"),
+    ("gemini-3-flash-preview",        "Gemini 3 Flash         Preview"),
+    ("gemini-3.1-pro-preview",        "Gemini 3.1 Pro         Preview · 최신 고성능"),
+]
 _CONFIGURED_API_KEY: str | None = None
 RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -420,4 +431,5 @@ __all__ = [
     "load_template_columns",
     "resolve_template_path",
     "DEFAULT_MODEL",
+    "GEMINI_MODELS",
 ]

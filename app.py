@@ -8,6 +8,7 @@ import streamlit as st
 
 from blooket_generator import (
     DEFAULT_MODEL,
+    GEMINI_MODELS,
     QuestionItem,
     build_question_csv,
     generate_question_set,
@@ -115,7 +116,14 @@ with st.sidebar:
     time_limit = st.number_input(
         "문항별 제한 시간 (초)", min_value=5, max_value=300, value=20, step=5
     )
-    model_name = st.text_input("Gemini 모델", value=DEFAULT_MODEL)
+    _model_ids = [m[0] for m in GEMINI_MODELS]
+    _model_labels = {m[0]: m[1] for m in GEMINI_MODELS}
+    model_name = st.selectbox(
+        "Gemini 모델",
+        options=_model_ids,
+        format_func=lambda x: _model_labels[x],
+        index=_model_ids.index(DEFAULT_MODEL),
+    )
     api_key_override = st.text_input(
         "Gemini API 키 (선택)",
         value="",
@@ -133,6 +141,15 @@ with st.sidebar:
         help="PDF나 PPTX 학습 자료를 업로드하면 문항 생성에 참고합니다.",
     )
     st.session_state["rag_enabled"] = rag_enabled
+
+    rag_context_chars = st.slider(
+        "RAG 컨텍스트 용량 (자)",
+        min_value=500,
+        max_value=5000,
+        value=1500,
+        step=100,
+        help="값이 클수록 더 많은 참고 자료를 포함하지만, 너무 크면 JSON 파싱 오류가 날 수 있습니다.",
+    )
 
     rag_uploads = st.file_uploader(
         "학습 자료 업로드 (PDF/PPTX)",
@@ -195,6 +212,7 @@ def run_generation(
     model_name: str,
     creativity: float,
     time_limit: int,
+    rag_context_chars: int = 1500,
 ) -> None:
     status_placeholder = st.empty()
     with st.spinner("문항을 생성 중입니다. 잠시만 기다려 주세요..."):
@@ -229,7 +247,8 @@ def run_generation(
                 retrieval_query,
                 st.session_state.get("rag_index", {}),
                 effective_api_key,
-                top_k=2,  # 컨텍스트 길이를 줄여 JSON 파싱 안정성 확보
+                top_k=2,
+                max_context_chars=rag_context_chars,
             )
             if rag_context:
                 reference_context = rag_context
@@ -297,6 +316,7 @@ if st.button("문항 생성하기", type="primary"):
         model_name,
         creativity,
         time_limit,
+        rag_context_chars=rag_context_chars,
     )
 
 questions_state: List[QuestionItem] | None = st.session_state.get("questions")
